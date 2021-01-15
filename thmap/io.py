@@ -68,6 +68,21 @@ class ThematicMap:
         self.theme_mapping = theme_mapping
 
     @staticmethod
+    def create_empty() -> ThematicMap:
+        data = np.zeros((1280, 1280))
+        now = datetime.now()
+        metadata = {'DATE-OBS': str(now)}
+        theme_mapping = {'outer_space': 1,
+                         'bright_region': 3,
+                         'filament': 4,
+                         'prominence': 5,
+                         'coronal_hole': 6,
+                         'quiet_sun': 7,
+                         'limb': 8,
+                         'flare': 9}
+        return ThematicMap(data, metadata, theme_mapping)
+
+    @staticmethod
     def load(path: str) -> ThematicMap:
         """
         Load a thematic map
