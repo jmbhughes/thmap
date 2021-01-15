@@ -1,3 +1,4 @@
+from __future__ import annotations
 from astropy.io import fits
 import numpy as np
 from goessolarretriever import Product, Satellite, Retriever
@@ -5,17 +6,19 @@ from collections import namedtuple
 import tempfile
 import os
 from dateutil.parser import parse as parse_date_str
+from datetime import datetime
+from typing import Dict, List
 
 Image = namedtuple('Image', 'data header')
 
 
 class ImageSet:
-    def __init__(self, mapping):
+    def __init__(self, mapping: Dict[str, Image]) -> None:
         super().__init__()
         self.images = mapping
 
     @staticmethod
-    def retrieve(date):
+    def retrieve(date: datetime) -> ImageSet:
         satellite = Satellite.GOES16
         products = {"94": Product.suvi_l2_ci094,
                     "131": Product.suvi_l2_ci131,
@@ -35,7 +38,7 @@ class ImageSet:
         return ImageSet(composites)
 
     @staticmethod
-    def create_empty():
+    def create_empty() -> ImageSet:
         mapping = {"94": Image(np.zeros((1280, 1280)), {}),
                    '131': Image(np.zeros((1280, 1280)), {}),
                    '171': Image(np.zeros((1280, 1280)), {}),
@@ -44,15 +47,15 @@ class ImageSet:
                    '304': Image(np.zeros((1280, 1280)), {})}
         return ImageSet(mapping)
 
-    def __getitem__(self, key):
+    def __getitem__(self, key) -> Image:
         return self.images[key]
 
-    def channels(self):
+    def channels(self) -> List[str]:
         return list(self.images.keys())
 
 
 class ThematicMap:
-    def __init__(self, data, metadata, theme_mapping):
+    def __init__(self, data: np.ndarray, metadata: Dict, theme_mapping: Dict[int, str]) -> None:
         """
         A representation of a thematic map
         :param data: the image of numbers for the labelling
@@ -65,7 +68,7 @@ class ThematicMap:
         self.theme_mapping = theme_mapping
 
     @staticmethod
-    def load(path):
+    def load(path: str) -> ThematicMap:
         """
         Load a thematic map
         :param path: path to the file
@@ -79,7 +82,7 @@ class ThematicMap:
                 del theme_mapping[0]
         return ThematicMap(data, metadata, theme_mapping)
 
-    def complies_with_mapping(self, other_theme_mapping):
+    def complies_with_mapping(self, other_theme_mapping: Dict) -> bool:
         """
         Checks that the theme mappings match, i.e. they have identical entries
         :param other_theme_mapping: a dictionary of another theme_mapping, e.g. {1: 'outer_space'}
@@ -98,7 +101,7 @@ class ThematicMap:
                 return False
         return True
 
-    def save(self, path):
+    def save(self, path: str) -> None:
         """
         Write out a thematic map FITS
         :param path: where to save thematic maps fits file
@@ -124,7 +127,7 @@ class ThematicMap:
         hdu = fits.HDUList([pri_hdu, sec_hdu])
         hdu.writeto(path, overwrite=True, checksum=True)
 
-    def copy_195_metadata(self, image_set):
+    def copy_195_metadata(self, image_set: ImageSet) -> None:
         keys_to_copy = ['YAW_FLIP', 'ECLIPSE', 'WCSNAME', 'CTYPE1', 'CTYPE2', 'CUNIT1', 'CUNIT2',
                         'PC1_1', 'PC1_2', 'PC2_1', 'PC2_2', 'CDELT1', 'CDELT2', 'CRVAL1', 'CRVAL2',
                         'CRPIX1', 'CRPIX2', 'DIAM_SUN', 'LONPOLE', 'CROTA', 'SOLAR_B0', 'ORIENT', 'DSUN_OBS']
