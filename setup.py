@@ -15,5 +15,6 @@ setup(
                       'numpy',
                       'deepdish',
                       'astropy',
-                      'goes-solar-retriever']
+                      'goes-solar-retriever',
+                      'matplotlib']
 )

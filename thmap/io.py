@@ -7,9 +7,21 @@ import tempfile
 import os
 from dateutil.parser import parse as parse_date_str
 from datetime import datetime
-from typing import Dict, List
+from typing import Dict, List, Optional
+from matplotlib.patches import Patch
+import matplotlib.pyplot as plt
+import matplotlib
 
 NUMBER_OF_CHANNELS = 6
+DEFAULT_THEMATIC_MAP_COLORS = {"unlabeled": "white",
+                                 "outer_space": "black",
+                                 "bright_region": "#F0E442",
+                                 "filament": "#D55E00",
+                                 "prominence": "#E69F00",
+                                 "coronal_hole": "#009E73",
+                                 "quiet_sun": "#0072B2",
+                                 "limb": "#56B4E9",
+                                 "flare": "#CC79A7"}
 
 Image = namedtuple('Image', 'data header')
 
@@ -88,22 +100,22 @@ class ThematicMap:
         """
         self.data = data
         self.metadata = metadata
-        self.date_obs = parse_date_str(self.metadata['DATE-OBS'])
-        self.theme_mapping = theme_mapping
+        self.date_obs: datetime = parse_date_str(self.metadata['DATE-OBS'])
+        self.theme_mapping: Dict[int, str] = theme_mapping
 
     @staticmethod
     def create_empty() -> ThematicMap:
-        data = np.zeros((1280, 1280))
-        now = datetime.now()
+        data: np.ndarray = np.zeros((1280, 1280))
+        now: datetime = datetime.now()
         metadata = {'DATE-OBS': str(now)}
-        theme_mapping = {'outer_space': 1,
-                         'bright_region': 3,
-                         'filament': 4,
-                         'prominence': 5,
-                         'coronal_hole': 6,
-                         'quiet_sun': 7,
-                         'limb': 8,
-                         'flare': 9}
+        theme_mapping: Dict[int, str] = {1: 'outer_space',
+                                         3: 'bright_region',
+                                         4: 'filament',
+                                         5: 'prominence',
+                                         6: 'coronal_hole',
+                                         7: 'quiet_sun',
+                                         8: 'limb',
+                                         9: 'flare'}
         return ThematicMap(data, metadata, theme_mapping)
 
     @staticmethod
@@ -173,3 +185,36 @@ class ThematicMap:
         if image_set.images['195'].header != {}:
             for key in keys_to_copy:
                 self.metadata[key] = image_set.images['195'].header[key]
+
+    def generate_plot(self, save_path: Optional[str] = None, with_legend: bool = False,
+                      colors: Optional[Dict[str, str]] = None) -> None:
+        """
+        Generates a color plot using Matplotlib of the thematic map
+        :param save_path: where to save the image if specified
+        :param with_legend: whether to include the legend in the plot
+        :param colors: the mapping of colors, with keys of themes and values of color for that theme
+        """
+        # setup color table
+        if colors is None:
+            colors = DEFAULT_THEMATIC_MAP_COLORS
+
+        if set(self.theme_mapping.values()).union({'unlabeled'}) != set(colors.keys()):
+            raise RuntimeError("Theme mapping themes do not match colors themes.")
+
+        colortable: List[str] = [colors[self.theme_mapping[i]] if i in self.theme_mapping else 'black'
+                      for i in range(max(list(self.theme_mapping.keys())) + 1)]
+        cmap = matplotlib.colors.ListedColormap(colortable)
+
+        # do actual plotting
+        fig, ax = plt.subplots()
+        ax.imshow(self.data, origin='lower', cmap=cmap, vmin=-1, vmax=len(colortable))
+        ax.set_axis_off()
+        if with_legend:
+            legend_elements = [Patch(facecolor=color, edgecolor="black", label=label.replace("_", " "))
+                               for label, color in colors.items()]
+            ax.legend(handles=legend_elements, loc='upper center', bbox_to_anchor=(0.5, 1.05),
+                      ncol=3, fancybox=True, shadow=True)
+        fig.tight_layout()
+        fig.show()
+        if save_path is not None:
+            fig.savefig(save_path, dpi=300)
