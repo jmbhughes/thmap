@@ -56,7 +56,26 @@ class ImageSet:
         return list(self.images.keys())
 
     def cube(self) -> np.ndarray:
+        """
+        Convert the image to a np.ndarray cube
+        :return: cube of an image with (1280,1280,6) shape
+        """
         return np.stack([self.images[channel].data for channel in self.channels()], axis=2)
+
+    def get_solar_radius(self, channel="304"):
+        """
+        Gets the solar radius from the header of the specified channel
+        :param channel: channel to get radius from
+        :return: solar radius specified in the header
+        """
+        if channel not in self.channels():
+            raise RuntimeError("Channel requested must be one of {}".format(self.channels()))
+        try:
+            solar_radius = self.images[channel].header['DIAM_SUN'] / 2
+        except KeyError:
+            raise RuntimeError("Header does not include the solar diameter or radius")
+        else:
+            return solar_radius
 
 
 class ThematicMap:
