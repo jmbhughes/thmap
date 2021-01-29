@@ -9,6 +9,8 @@ from dateutil.parser import parse as parse_date_str
 from datetime import datetime
 from typing import Dict, List
 
+NUMBER_OF_CHANNELS = 6
+
 Image = namedtuple('Image', 'data header')
 
 
@@ -52,6 +54,9 @@ class ImageSet:
 
     def channels(self) -> List[str]:
         return list(self.images.keys())
+
+    def cube(self) -> np.ndarray:
+        return np.stack([self.images[channel].data for channel in self.channels()], axis=2)
 
 
 class ThematicMap:
