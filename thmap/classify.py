@@ -174,8 +174,15 @@ class ConcentricPixelClassifier(PixelClassifier):
             -> Dict[int, Dict[str, np.ndarray]]:
         # setup the blank and empty pixel database
         pix_db = dict()
+
+        # Define the number of layers
+        if self.radii is None:
+            num_layers = 0
+        else:
+            num_layers = len(self.radii)
+
         # Iterate through number of layers in mask
-        for i in range(len(self.radii) + 1):
+        for i in range(num_layers + 1):
             # Make temporary dictionary
             themes_temp = self.themes_in_radii[i]
             # Create temporary dictionary
