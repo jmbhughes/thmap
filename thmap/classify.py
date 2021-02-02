@@ -4,7 +4,7 @@ from abc import ABC, abstractmethod
 import warnings
 import numpy as np
 from typing import List
-from .io import ThematicMap, ImageSet, NUMBER_OF_CHANNELS
+from thmap.io import ThematicMap, ImageSet, NUMBER_OF_CHANNELS
 from typing import Dict, Optional, List
 from sklearn.ensemble import RandomForestClassifier as skRandomForestClassifier
 import deepdish as dd
