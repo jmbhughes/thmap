@@ -110,7 +110,8 @@ class ConcentricPixelClassifier(PixelClassifier):
 
     def __init__(self, solar_indices: Dict[str, int],
                  themes_in_radii: List[List[str]],
-                 radii: Optional[List[int]] = None) -> None:
+                 radii: Optional[List[int]] = None,
+                 radii_solar: Optional[bool] = True) -> None:
         """
         generic initialization
         """
@@ -122,8 +123,11 @@ class ConcentricPixelClassifier(PixelClassifier):
         self.image_size: int = 1280  # this is specific for SUVI implementations, assumes a square image
 
         self.solar_indices: Dict[str, int] = solar_indices
+
+        # Parameter for whether the inner radius is set to the solar radius from the composite metadata
+        self.radii_solar = radii_solar
         self.radii: Optional[List[int]] = radii
-        self.mask: np.ndarray = self._create_mask()
+
         self.themes_in_radii: List[List[str]] = themes_in_radii
         if self.radii is not None:
             if len(self.radii) + 1 != len(themes_in_radii):
@@ -133,7 +137,7 @@ class ConcentricPixelClassifier(PixelClassifier):
                 raise RuntimeError("There is a mismatch between the number of radii and the defined themes for radii.")
         self.pixel_db = None  # will be setup during training
 
-    def _create_mask(self):
+    def _create_mask(self, radii_mask):
         """
         Creates a mask for the concentric rings of the classifier models
         :return: starting at 1 each pixel is assigned an integer for its concentric ring
@@ -156,7 +160,7 @@ class ConcentricPixelClassifier(PixelClassifier):
             rad = np.sqrt(xm_c ** 2 + ym_c ** 2)
 
             # Define radii bounds
-            radii_new = self.radii.copy()
+            radii_new = radii_mask.copy()
             radii_new.append(np.amax(rad))
             radii_new.insert(0, 0)
 
@@ -172,10 +176,10 @@ class ConcentricPixelClassifier(PixelClassifier):
 
     def _define_pixel_database(self, thmaps: List[ThematicMap], counts_per_theme=2000) \
             -> Dict[int, Dict[str, np.ndarray]]:
-        # setup the blank and empty pixel database
+        # Setup the blank and empty pixel database
         pix_db = dict()
 
-        # Define the number of layers
+        # Define the number of layers depending on radii
         if self.radii is None:
             num_layers = 0
         else:
@@ -194,10 +198,22 @@ class ConcentricPixelClassifier(PixelClassifier):
             # Create entry in pixel database
             pix_db[i + 1] = dict_theme
 
-        # populate it with values from thematic map image sets
+        # Populate it with values from thematic map image sets
         for i, thmap in enumerate(thmaps):
+
+            # Change inner radius to the solar radius of the current image if solar radii is on
+            if self.radii is not None and self.radii_solar:
+                radii_temp = self.radii.copy()
+                radii_temp[0] = self.images[i].get_solar_radius()
+                # Create a mask given the modified solar radii
+                mask_temp = self._create_mask(radii_temp)
+            else:
+                # Create a mask with the predefined radii if solar radii is off
+                mask_temp = self._create_mask(self.radii)
+
+            # Populate pixel database from data in each theme within each layer
             for layer in pix_db:
-                layer_mask = (self.mask == layer)
+                layer_mask = (mask_temp == layer)
                 image_set = self.images[i]
                 cube = image_set.cube()
                 for theme in self.themes_in_radii[layer - 1]:
@@ -205,7 +221,7 @@ class ConcentricPixelClassifier(PixelClassifier):
                     theme_pixels = cube[theme_mask, :]
                     pix_db[layer][theme] = np.concatenate([pix_db[layer][theme], theme_pixels])
 
-        # Resample it to the number of counts per theme requested
+        # Re-sample it to the number of counts per theme requested
         for layer in pix_db:
             for theme in pix_db[layer]:
                 indices = np.random.choice(range(pix_db[layer][theme].shape[0]), counts_per_theme)
@@ -240,9 +256,11 @@ class ConcentricPixelClassifier(PixelClassifier):
 class ConcentricRandomForest(ConcentricPixelClassifier):
     def __init__(self, solar_indices: Dict[str, int],
                  themes_in_radii: List[List[str]],
-                 radii: Optional[List[int]] = None,  n_trees=20, max_depth=7, min_samples_leaf=100,
+                 radii: Optional[List[int]] = None,
+                 radii_solar: Optional[bool] = True,
+                 n_trees=20, max_depth=7, min_samples_leaf=100,
                  weights=None, criterion='entropy', n_cores=3, bootstrap=False) -> None:
-        super().__init__(solar_indices, themes_in_radii, radii)
+        super().__init__(solar_indices, themes_in_radii, radii, radii_solar)
         self.kind: str = "ConcentricRandomForest"
 
         self.models = [skRandomForestClassifier(bootstrap=bootstrap, n_estimators=n_trees,
@@ -367,10 +385,21 @@ class ConcentricRandomForest(ConcentricPixelClassifier):
         super().classify(images)
         cube = images.cube()
         new_thmap = np.zeros((1280, 1280))
-        for layer in np.unique(self.mask).astype(int):
-            layer_mask = (self.mask == layer)
+
+        # Sets inner radius to solar radius if solar radii is on and creates mask
+        if self.radii is not None and self.radii_solar:
+            radii_temp = self.radii.copy()
+            radii_temp[0] = images.get_solar_radius()
+            mask_temp = self._create_mask(radii_temp)
+        else:
+            mask_temp = self._create_mask(self.radii)
+
+        # Gets predictions for each layer and concatenates into thematic map output
+        for layer in np.unique(mask_temp).astype(int):
+            layer_mask = (mask_temp == layer)
             rf = self.models[layer - 1]
             predictions = rf.predict(cube[layer_mask, :])
             new_thmap[layer_mask] = predictions
         theme_mapping = {value: key for key, value in self.solar_indices.items()}
+
         return ThematicMap(new_thmap, {'DATE-OBS': images['195'].header['DATE-OBS']}, theme_mapping)
