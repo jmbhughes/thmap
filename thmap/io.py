@@ -201,7 +201,7 @@ class ThematicMap:
         if set(self.theme_mapping.values()).union({'unlabeled'}) != set(colors.keys()):
             raise RuntimeError("Theme mapping themes do not match colors themes.")
 
-        colortable: List[str] = [colors[self.theme_mapping[i]] if i in self.theme_mapping else 'black'
+        colortable: List[str] = [colors[self.theme_mapping[i]] if i in self.theme_mapping else 'white'
                       for i in range(max(list(self.theme_mapping.keys())) + 1)]
         cmap = matplotlib.colors.ListedColormap(colortable)
 
