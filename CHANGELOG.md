@@ -9,6 +9,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 ### Changed
 * Removed relative imports
 
+### Added
+* `radii_solar` as attribute of `ConcentricPixelClassifier`
+* `ProbabilisticConcentricRandomForest` in `classify`
+
 ## [0.0.2]
 ### New
 * `create_empty` for `io.ThematicMap`
