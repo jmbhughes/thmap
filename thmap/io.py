@@ -32,14 +32,20 @@ class ImageSet:
         self.images = mapping
 
     @staticmethod
-    def retrieve(date: datetime) -> ImageSet:
+    def retrieve(date: datetime, channel_out: str = None) -> ImageSet:
+
         satellite = Satellite.GOES16
+
         products = {"94": Product.suvi_l2_ci094,
                     "131": Product.suvi_l2_ci131,
                     "171": Product.suvi_l2_ci171,
                     "195": Product.suvi_l2_ci195,
                     "284": Product.suvi_l2_ci284,
                     "304": Product.suvi_l2_ci304}
+
+        if channel_out is not None:
+            del products[channel_out]
+
         composites = {}
         r = Retriever()
         for wavelength, product in products.items():
@@ -74,16 +80,47 @@ class ImageSet:
         """
         return np.stack([self.images[channel].data for channel in self.channels()], axis=2)
 
-    def get_solar_radius(self, channel="304"):
+    def get_solar_radius(self, channel="304", refine=True):
         """
         Gets the solar radius from the header of the specified channel
         :param channel: channel to get radius from
+        :param refine: whether to refine the metadata radius to better approximate the edge
         :return: solar radius specified in the header
         """
+
+        # Return the solar radius
         if channel not in self.channels():
             raise RuntimeError("Channel requested must be one of {}".format(self.channels()))
         try:
             solar_radius = self.images[channel].header['DIAM_SUN'] / 2
+            if refine:
+                composite_img = self.images[channel].data
+                # Determine image size
+                image_size = np.shape(composite_img)[0]
+                # Find center and radial mesh grid
+                center = (image_size / 2) - 0.5
+                xm, ym = np.meshgrid(np.linspace(0, image_size - 1, num=image_size),
+                                     np.linspace(0, image_size - 1, num=image_size))
+                xm_c = xm - center
+                ym_c = ym - center
+                rads = np.sqrt(xm_c ** 2 + ym_c ** 2)
+                # Iterate through radii within a range past the solar radius
+                accuracy = 15
+                rad_iterate = np.linspace(solar_radius, solar_radius + 50, num=accuracy)
+                img_avgs = []
+                for rad in rad_iterate:
+                    # Create a temporary solar image corresponding to the layer
+                    solar_layer = np.zeros((image_size, image_size))
+                    # Find indices in mask of the layer
+                    indx_layer = np.where(rad >= rads)
+                    # Set temporary image corresponding to indices to solar image values
+                    solar_layer[indx_layer] = composite_img[indx_layer]
+                    # Appends average to image averages
+                    img_avgs.append(np.mean(solar_layer))
+                # Find "drop off" where mask causes average image brightness to drop
+                diff_avgs = np.asarray(img_avgs[0:accuracy - 1]) - np.asarray(img_avgs[1:accuracy])
+                # Return the radius that best represents the edge of the sun
+                solar_radius = rad_iterate[np.where(np.amax(diff_avgs))[0] + 1]
         except KeyError:
             raise RuntimeError("Header does not include the solar diameter or radius")
         else:
@@ -207,7 +244,7 @@ class ThematicMap:
 
         # do actual plotting
         fig, ax = plt.subplots()
-        ax.imshow(self.data, origin='lower', cmap=cmap, vmin=-1, vmax=len(colortable))
+        ax.imshow(self.data, origin='lower', cmap=cmap, vmin=-1, vmax=len(colortable), interpolation='none')
         ax.set_axis_off()
         if with_legend:
             legend_elements = [Patch(facecolor=color, edgecolor="black", label=label.replace("_", " "))

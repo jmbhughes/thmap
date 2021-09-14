@@ -32,21 +32,27 @@ class PixelClassifier(ABC):
         self.dtype = np.uint8  # what data type the output thematic maps will be
 
     @staticmethod
-    def _load_composites(thematic_map: ThematicMap) -> ImageSet:
+    def _load_composites(thematic_map: ThematicMap, channel_out: str = None) -> ImageSet:
         """
         Fetch the composites associated with a specific thematic map
         :param thematic_map:
-        :return:
+        :return: image set
         """
-        return ImageSet.retrieve(thematic_map.date_obs)
+        if channel_out is None:
+            image_set = ImageSet.retrieve(thematic_map.date_obs)
+        else:
+            image_set = ImageSet.retrieve(thematic_map.date_obs, channel_out=channel_out)
+        return image_set
 
     @abstractmethod
-    def train(self, thematic_maps: List[ThematicMap], image_sets: Optional[List[ImageSet]] = None) -> None:
+    def train(self, thematic_maps: List[ThematicMap], image_sets: Optional[List[ImageSet]] = None,
+              channel_out: str = None) -> None:
         """
         Fit the classifier to some example data.
         Every train method must set is_trained to true
         :param thematic_maps: a list of thematic maps to train from
         :param image_sets: if specified, will use these instead of fetching the associated thematic maps
+        :param channel_out: whether a channel is missing in the trained model
         """
         if len(thematic_maps) == 0:
             raise RuntimeError("At least one thematic map must be specified.")
@@ -58,7 +64,7 @@ class PixelClassifier(ABC):
         else:
             self.images = []
             for thematic_map in thematic_maps:
-                self.images.append(PixelClassifier._load_composites(thematic_map))
+                self.images.append(PixelClassifier._load_composites(thematic_map, channel_out))
 
     @staticmethod
     @abstractmethod
@@ -111,7 +117,7 @@ class ConcentricPixelClassifier(PixelClassifier):
     def __init__(self, solar_indices: Dict[str, int],
                  themes_in_radii: List[List[str]],
                  radii: Optional[List[int]] = None,
-                 radii_solar: Optional[bool] = True) -> None:
+                 use_solar_radius: Optional[bool] = True) -> None:
         """
         generic initialization
         """
@@ -125,7 +131,7 @@ class ConcentricPixelClassifier(PixelClassifier):
         self.solar_indices: Dict[str, int] = solar_indices
 
         # Parameter for whether the inner radius is set to the solar radius from the composite metadata
-        self.radii_solar = radii_solar
+        self.use_solar_radius = use_solar_radius
         self.radii: Optional[List[int]] = radii
 
         self.themes_in_radii: List[List[str]] = themes_in_radii
@@ -174,10 +180,16 @@ class ConcentricPixelClassifier(PixelClassifier):
 
             return mask
 
-    def _define_pixel_database(self, thmaps: List[ThematicMap], counts_per_theme=2000) \
+    def _define_pixel_database(self, thmaps: List[ThematicMap], counts_per_theme=2000, channel_out=None) \
             -> Dict[int, Dict[str, np.ndarray]]:
         # Setup the blank and empty pixel database
         pix_db = dict()
+
+        # Define the total number of channels
+        if channel_out is None:
+            num_channels = NUMBER_OF_CHANNELS
+        else:
+            num_channels = NUMBER_OF_CHANNELS - 1
 
         # Define the number of layers depending on radii
         if self.radii is None:
@@ -196,13 +208,13 @@ class ConcentricPixelClassifier(PixelClassifier):
                 # If concentric random forest, set up dictionary with layer:theme
                 if self.kind == "ConcentricRandomForest":
                     # Initialize dictionary with empty array
-                    dict_theme[theme_temp] = np.empty((0, NUMBER_OF_CHANNELS))
+                    dict_theme[theme_temp] = np.empty((0, num_channels))
                 # If probabilistic concentric rf, dictionary is structured layer:theme:on/off
                 elif self.kind == "ProbabilisticConcentricRandomForest":
                     # Initialize both on and off dictionaries with empty arrays
                     dict_onoff = dict()
-                    dict_onoff['on'] = np.empty((0, NUMBER_OF_CHANNELS))
-                    dict_onoff['off'] = np.empty((0, NUMBER_OF_CHANNELS))
+                    dict_onoff['on'] = np.empty((0, num_channels))
+                    dict_onoff['off'] = np.empty((0, num_channels))
                     dict_theme[theme_temp] = dict_onoff
             # Create entry in pixel database
             pix_db[i + 1] = dict_theme
@@ -211,9 +223,9 @@ class ConcentricPixelClassifier(PixelClassifier):
         for i, thmap in enumerate(thmaps):
 
             # Change inner radius to the solar radius of the current image if solar radii is on
-            if self.radii is not None and self.radii_solar:
+            if self.radii is not None and self.use_solar_radius:
                 radii_temp = self.radii.copy()
-                radii_temp[0] = self.images[i].get_solar_radius() + 5
+                radii_temp[0] = self.images[i].get_solar_radius()
                 # Create a mask given the modified solar radii
                 mask_temp = self._create_mask(radii_temp)
             else:
@@ -226,6 +238,7 @@ class ConcentricPixelClassifier(PixelClassifier):
                 layer_mask = (mask_temp == layer)
                 # Define image set object corresponding to current thematic map
                 image_set = self.images[i]
+                # Cube the image set
                 cube = image_set.cube()
                 for theme in self.themes_in_radii[layer - 1]:
                     # If its a concentric random forest populate theme: layer in pixel database
@@ -247,25 +260,27 @@ class ConcentricPixelClassifier(PixelClassifier):
                         pix_db[layer][theme]['off'] = np.concatenate([pix_db[layer][theme]['off'], theme_pixels_off])
 
         # Re-sample it to the number of counts per theme requested
-        for layer in pix_db:
-            for theme in pix_db[layer]:
-                # If concentric random forest, choose counts per theme random pixels
-                if self.kind == "ConcentricRandomForest":
-                    indices = np.random.choice(range(pix_db[layer][theme].shape[0]), counts_per_theme)
-                    pix_db[layer][theme] = pix_db[layer][theme][indices]
-                # If probabilistic concentric random forest, choose counts per theme/2 for on and off pixels
-                elif self.kind == "ProbabilisticConcentricRandomForest":
-                    indices_on = np.random.choice(range(pix_db[layer][theme]['on'].shape[0]), int(counts_per_theme/2))
-                    pix_db[layer][theme]['on'] = pix_db[layer][theme]['on'][indices_on]
-                    indices_off = np.random.choice(range(pix_db[layer][theme]['off'].shape[0]), int(counts_per_theme/2))
-                    pix_db[layer][theme]['off'] = pix_db[layer][theme]['off'][indices_off]
+        if counts_per_theme is not None:
+            for layer in pix_db:
+                for theme in pix_db[layer]:
+                    # If concentric random forest, choose counts per theme random pixels
+                    if self.kind == "ConcentricRandomForest":
+                        indices = np.random.choice(range(pix_db[layer][theme].shape[0]), counts_per_theme)
+                        pix_db[layer][theme] = pix_db[layer][theme][indices]
+                    # If probabilistic concentric random forest, choose counts per theme/2 for on and off pixels
+                    elif self.kind == "ProbabilisticConcentricRandomForest":
+                        indices_on = np.random.choice(range(pix_db[layer][theme]['on'].shape[0]), int(counts_per_theme/2))
+                        pix_db[layer][theme]['on'] = pix_db[layer][theme]['on'][indices_on]
+                        indices_off = np.random.choice(range(pix_db[layer][theme]['off'].shape[0]), int(counts_per_theme/2))
+                        pix_db[layer][theme]['off'] = pix_db[layer][theme]['off'][indices_off]
         return pix_db
 
     @abstractmethod
     def train(self, thematic_maps: List[ThematicMap], image_sets: Optional[List[ImageSet]] = None,
-              counts_per_theme: int = 2000) -> None:
-        super().train(thematic_maps, image_sets)
-        self.pixel_db = self._define_pixel_database(thematic_maps, counts_per_theme=counts_per_theme)
+              counts_per_theme: int = 2000, channel_out: str = None) -> None:
+        super().train(thematic_maps, image_sets, channel_out)
+        self.pixel_db = self._define_pixel_database(thematic_maps, counts_per_theme=counts_per_theme,
+                                                    channel_out=channel_out)
 
     @staticmethod
     @abstractmethod
@@ -290,10 +305,10 @@ class ConcentricRandomForest(ConcentricPixelClassifier):
     def __init__(self, solar_indices: Dict[str, int],
                  themes_in_radii: List[List[str]],
                  radii: Optional[List[int]] = None,
-                 radii_solar: Optional[bool] = True,
+                 use_solar_radius: Optional[bool] = True,
                  n_trees=20, max_depth=7, min_samples_leaf=100,
                  weights=None, criterion='entropy', n_cores=3, bootstrap=False) -> None:
-        super().__init__(solar_indices, themes_in_radii, radii, radii_solar)
+        super().__init__(solar_indices, themes_in_radii, radii, use_solar_radius)
         self.kind: str = "ConcentricRandomForest"
 
         self.models = [skRandomForestClassifier(bootstrap=bootstrap, n_estimators=n_trees,
@@ -303,8 +318,8 @@ class ConcentricRandomForest(ConcentricPixelClassifier):
                        for _ in range(len(themes_in_radii))]
 
     def train(self, thematic_maps: List[ThematicMap], image_sets: Optional[List[ImageSet]] = None,
-              counts_per_theme: int = 2000) -> None:
-        super().train(thematic_maps, image_sets, counts_per_theme)
+              counts_per_theme: int = 2000, channel_out: str = None) -> None:
+        super().train(thematic_maps, image_sets, counts_per_theme, channel_out)
         for layer, layer_db in self.pixel_db.items():
             x = np.concatenate([values for _, values in layer_db.items()])
             y = np.concatenate([np.repeat(self.solar_indices[theme], values.shape[0])
@@ -339,7 +354,7 @@ class ConcentricRandomForest(ConcentricPixelClassifier):
             return rf
 
         rf = ConcentricRandomForest(full_contents['solar_indices'], full_contents['themes_in_radii'],
-                                    full_contents['radii'], full_contents['radii_solar'])
+                                    full_contents['radii'], full_contents['use_solar_radius'])
         for k, v in full_contents.items():
             if k != 'sk_models_':
                 setattr(rf, k, v)
@@ -375,7 +390,7 @@ class ConcentricRandomForest(ConcentricPixelClassifier):
         for model_i, model in enumerate(self.models):
             contents['sk_models_'].append(save_sk_forest(model))
 
-        variables_to_save = ['kind', 'image_size', 'solar_indices', 'radii_solar',
+        variables_to_save = ['kind', 'image_size', 'solar_indices', 'use_solar_radius',
                              'radii', 'themes_in_radii', 'is_trained',
                              'theme_index', 'channel_order', 'dtype']
         for k, v in vars(self).items():
@@ -420,9 +435,9 @@ class ConcentricRandomForest(ConcentricPixelClassifier):
         new_thmap = np.zeros((self.image_size, self.image_size))
 
         # Sets inner radius to solar radius if solar radii is on and creates mask
-        if self.radii is not None and self.radii_solar:
+        if self.radii is not None and self.use_solar_radius:
             radii_temp = self.radii.copy()
-            radii_temp[0] = images.get_solar_radius() + 5
+            radii_temp[0] = images.get_solar_radius()
             mask_temp = self._create_mask(radii_temp)
         else:
             mask_temp = self._create_mask(self.radii)
@@ -443,13 +458,13 @@ class ProbabilisticConcentricRandomForest(ConcentricPixelClassifier):
                  themes_in_radii: List[List[str]],
                  theme_probabilities: Dict[str, float],
                  radii: Optional[List[int]] = None,
-                 radii_solar: Optional[bool] = True,
-                 autofill: Optional[bool] = True,
-                 autofill_themes: Optional[List[str]] = ['quiet_sun', 'outer_space', 'outer_space'],
+                 use_solar_radius: bool = True,
+                 autofill: bool = True,
+                 autofill_themes: Tuple[str] = ('quiet_sun', 'outer_space', 'outer_space'),
                  n_trees=20, max_depth=7, min_samples_leaf=100,
                  weights=None, criterion='entropy', n_cores=3, bootstrap=False) -> None:
         # Initialize super class with basics of a concentric pixel classifier
-        super().__init__(solar_indices, themes_in_radii, radii, radii_solar)
+        super().__init__(solar_indices, themes_in_radii, radii, use_solar_radius)
         # Set type of concentric pixel classifier
         self.kind: str = "ProbabilisticConcentricRandomForest"
 
@@ -470,10 +485,11 @@ class ProbabilisticConcentricRandomForest(ConcentricPixelClassifier):
                                                                 max_depth=max_depth, n_jobs=n_cores)
             self.models[i+1] = dict_theme_rf
 
+
     def train(self, thematic_maps: List[ThematicMap], image_sets: Optional[List[ImageSet]] = None,
-              counts_per_theme: int = 2000) -> None:
+              counts_per_theme: int = 2000, channel_out: str = None) -> None:
         # Initializes pixel database in super training - different initialization for probabilistic rf
-        super().train(thematic_maps, image_sets, counts_per_theme)
+        super().train(thematic_maps, image_sets, counts_per_theme, channel_out)
         # Access training data from pixel database
         for layer, layer_db in self.pixel_db.items():
             for theme, theme_db in layer_db.items():
@@ -520,11 +536,11 @@ class ProbabilisticConcentricRandomForest(ConcentricPixelClassifier):
         # Initialize random forest with all parameters from saved random forest models
         rf = ProbabilisticConcentricRandomForest(full_contents['solar_indices'], full_contents['themes_in_radii'],
                                                  full_contents['theme_probabilities'], full_contents['radii'],
-                                                 full_contents['radii_solar'], full_contents['autofill'],
+                                                 full_contents['use_solar_radius'], full_contents['autofill'],
                                                  full_contents['autofill_themes'])
         # Initialize all contents as attributes except sk models (more complex) and theme/layer mapping (not attributes)
         for k, v in full_contents.items():
-            if k != ('sk_models_' or 'model_layer_mapping' or 'model_theme_mapping'):
+            if not k in ['sk_models_', 'model_layer_mapping', 'model_theme_mapping', 'theme_index']:
                 setattr(rf, k, v)
         # Create an empty dictionary with themes and layers to save the random forest models in
         rf.models = dict()
@@ -580,7 +596,7 @@ class ProbabilisticConcentricRandomForest(ConcentricPixelClassifier):
 
         # Variables to save include parameters unique to probabilistic concentric random forest
         variables_to_save = ['kind', 'image_size', 'solar_indices', 'theme_probabilities',
-                             'radii_solar', 'autofill', 'autofill_themes', 'radii',
+                             'use_solar_radius', 'autofill', 'autofill_themes', 'radii',
                              'themes_in_radii', 'is_trained', 'theme_index', 'channel_order', 'dtype']
         for k, v in vars(self).items():
             if k in variables_to_save:
@@ -625,15 +641,16 @@ class ProbabilisticConcentricRandomForest(ConcentricPixelClassifier):
         super().classify(images)
 
         # Sets inner radius to solar radius if solar radii is on
-        if self.radii is not None and self.radii_solar:
+        if self.radii is not None and self.use_solar_radius:
             radii_temp = self.radii.copy()
             # Sets inner most solar radius to the solar radius with a scale factor of 5
-            radii_temp[0] = images.get_solar_radius() + 5
+            radii_temp[0] = images.get_solar_radius()
             # Creates mask for these radii bounds
             mask_temp = self._create_mask(radii_temp)
         else:
             mask_temp = self._create_mask(self.radii)
 
+        # Define the cube of the image set
         cube = images.cube()
         # Create empty thematic map to populate
         new_thmap = np.zeros((self.image_size, self.image_size))
@@ -667,16 +684,16 @@ class ProbabilisticConcentricRandomForest(ConcentricPixelClassifier):
 
         # Set theme mapping to create a thematic map object to return
         theme_mapping = {value: key for key, value in self.solar_indices.items()}
-        return ThematicMap(new_thmap, {'DATE-OBS': images['195'].header['DATE-OBS']}, theme_mapping)
+        return ThematicMap(new_thmap, {'DATE-OBS': images['171'].header['DATE-OBS']}, theme_mapping)
 
     def get_probability_map(self, images: ImageSet, theme: str) -> np.ndarray:
         # To ensure that error is thrown if random forests are not trained
         super().classify(images)
 
         # Sets inner radius to solar radius if solar radii is on
-        if self.radii is not None and self.radii_solar:
+        if self.radii is not None and self.use_solar_radius:
             radii_temp = self.radii.copy()
-            radii_temp[0] = images.get_solar_radius() + 5
+            radii_temp[0] = images.get_solar_radius()
             mask_temp = self._create_mask(radii_temp)
         else:
             mask_temp = self._create_mask(self.radii)
